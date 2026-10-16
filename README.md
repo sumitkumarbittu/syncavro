@@ -26,6 +26,125 @@ Syncavro is a Manifest V3 Chrome extension that opens as a page-mounted drawer f
 - Firebase Blaze billing for Cloud Storage. Firebase now requires the pay-as-you-go Blaze plan to provision and use Cloud Storage. Google Cloud's no-cost usage allowances can still apply, but you should configure billing budgets and alerts.
 - Node.js only for the local packaging command. No packages are installed.
 
+## React website
+
+The repository now includes a mobile-first React application in [`web/`](web). It connects directly to the same Firebase backend as the Chrome extension, so website and extension users can join the same numbered broadcast and see the same messages.
+
+The web application includes:
+
+- Responsive iPhone 16/17-first layout, tested at a `402 × 874` CSS-pixel viewport
+- Expanded desktop workspace for laptop use
+- Live numbered broadcasts and recent-broadcast history
+- Text and image sharing
+- Persistent IndexedDB upload queue
+- Background uploads, Retry, Clear, and Clear all
+- SHA-256 duplicate prevention shared with the extension
+- Image drag-and-drop, clipboard image paste, and file selection
+- Text copying and image downloads
+- Dark, Light, and System themes
+- Editable Firebase connection settings
+- Safe-area support for iPhone displays and reduced-motion accessibility
+
+The website is a static Vite build. Render only serves the generated files; authentication, realtime data, and images go directly between the browser and Firebase. No Render server, database, paid instance, or secret is required.
+
+### Run the React application locally
+
+From the repository root:
+
+```sh
+cd web
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite. Create a production build with:
+
+```sh
+npm run build
+```
+
+The generated website is written to `web/dist`. Run the shared tests with:
+
+```sh
+npm test
+```
+
+### Deploy to Render free tier using the Blueprint
+
+The root [`render.yaml`](render.yaml) contains the complete Render Static Site configuration. This is the recommended deployment method.
+
+1. Push this repository to GitHub.
+2. Sign in to [Render](https://dashboard.render.com/).
+3. Select **New +** and then **Blueprint**.
+4. Connect the GitHub account that owns the repository.
+5. Select the `syncavro` repository.
+6. Render detects `render.yaml`. Review the service named `syncavro`.
+7. Select **Apply** or **Deploy Blueprint**.
+8. Wait until the deployment status is **Live**.
+9. Open the generated `https://YOUR-SERVICE-NAME.onrender.com` URL.
+10. Send a test message in broadcast `0001`, then open the extension or website on another device using the same broadcast number.
+
+The Blueprint uses these settings:
+
+| Render setting | Value |
+| --- | --- |
+| Service type | Static Site |
+| Root directory | `web` |
+| Build command | `npm ci && npm run build` |
+| Publish directory | `web/dist` through `staticPublishPath: ./dist` inside the root directory |
+| SPA route | Every path rewrites to `/index.html` |
+
+Render Static Sites are compatible with the free tier and do not need a continuously running web service. Firebase billing remains separate. Cloud Storage may still require the Firebase Blaze plan, as described below.
+
+### Deploy manually on Render
+
+Use this only if you do not want to deploy the Blueprint:
+
+1. In Render, select **New + > Static Site**.
+2. Connect and select the `syncavro` GitHub repository.
+3. Set **Root Directory** to `web`.
+4. Set **Build Command** to `npm ci && npm run build`.
+5. Set **Publish Directory** to `dist`.
+6. Add a rewrite rule with source `/*` and destination `/index.html`, using action **Rewrite**.
+7. Select the free Static Site option and create the service.
+
+### Firebase settings for the Render domain
+
+The shared Firebase Web configuration is included in `web/src/config.js`, so the first deployment works without Render environment variables. Firebase Web API keys are client identifiers and must be protected by Authentication and Security Rules, not treated as server secrets.
+
+After Render assigns the website URL:
+
+1. Open Firebase Console for `syncavro-real-time-sharing`.
+2. Open **Authentication > Settings > Authorized domains**.
+3. Add only the hostname, such as `syncavro.onrender.com`, if it is not already accepted.
+4. Confirm **Authentication > Sign-in method > Anonymous** remains enabled.
+5. Deploy `database.rules.json` and `storage.rules` from this repository.
+6. If the Firebase API key has HTTP-referrer restrictions in Google Cloud Console, add `https://YOUR-SERVICE-NAME.onrender.com/*` to the allowed websites.
+
+To use a different Firebase project without changing source code, add any of these optional environment variables in Render before redeploying:
+
+| Variable | Firebase value |
+| --- | --- |
+| `VITE_FIREBASE_API_KEY` | Web API key |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Authentication domain |
+| `VITE_FIREBASE_DATABASE_URL` | Exact Realtime Database URL |
+| `VITE_FIREBASE_PROJECT_ID` | Project ID |
+| `VITE_FIREBASE_STORAGE_BUCKET` | Storage bucket name |
+| `VITE_FIREBASE_APP_ID` | Web App ID |
+
+Vite embeds `VITE_` values into the public browser bundle at build time. Never enter a service-account JSON file, private key, Firebase CLI token, or refresh token in Render.
+
+### Automatic Render updates
+
+Render automatically rebuilds the Static Site when new commits reach the connected GitHub branch. Before pushing a website update, verify it locally:
+
+```sh
+npm run web:build
+npm run web:test
+```
+
+If a deploy fails, open the Render deploy log and confirm that the root directory is `web`, `npm ci` found `web/package-lock.json`, and the publish directory is `dist`.
+
 ## Install directly from GitHub
 
 Contributors do not need Node.js or Firebase configuration changes when using the committed build:

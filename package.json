@@ -6,6 +6,9 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test tests/*.test.mjs",
-    "smoke:firebase": "node scripts/firebase-smoke.mjs"
+    "smoke:firebase": "node scripts/firebase-smoke.mjs",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
+    "web:test": "npm --prefix web test"
   }
 }
