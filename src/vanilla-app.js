@@ -1,6 +1,6 @@
 import { FirebaseRest } from "./firebase-rest.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { hashFile, hashText, normalizeText } from "./lib/hash.js";
+import { createMessageId, hashFile, hashText, normalizeText } from "./lib/hash.js";
 import { getLocal, removeLocal, setLocal } from "./lib/local-store.js";
 import { queueDb } from "./lib/queue-db.js";
 
@@ -252,8 +252,9 @@ async function sendText() {
   if (!text) return;
   input.value = "";
   document.querySelector("#send").disabled = true;
-  const hash = await hashText(text);
-  await enqueue({ id: `${state.broadcast}:${hash}`, hash, broadcast: state.broadcast, type: "text", text, status: "queued", progress: 0, createdAt: Date.now() });
+  const contentHash = await hashText(text);
+  const messageId = createMessageId();
+  await enqueue({ id: `${state.broadcast}:${messageId}`, messageId, contentHash, broadcast: state.broadcast, type: "text", text, status: "queued", progress: 0, createdAt: Date.now() });
 }
 
 async function addFiles(files) {
@@ -261,8 +262,9 @@ async function addFiles(files) {
     if (!file.type.startsWith("image/")) { toast("Only image files can be shared"); continue; }
     const name = file.name || `pasted-image-${Date.now()}.${file.type.split("/")[1] || "png"}`;
     if (file.size > 10 * 1024 * 1024) { toast(`${name} is over 10 MB`); continue; }
-    const hash = await hashFile(file);
-    await enqueue({ id: `${state.broadcast}:${hash}`, hash, broadcast: state.broadcast, type: "image", blob: file, name, mime: file.type, size: file.size, status: "queued", progress: 0, createdAt: Date.now() });
+    const contentHash = await hashFile(file);
+    const messageId = createMessageId();
+    await enqueue({ id: `${state.broadcast}:${messageId}`, messageId, contentHash, broadcast: state.broadcast, type: "image", blob: file, name, mime: file.type, size: file.size, status: "queued", progress: 0, createdAt: Date.now() });
   }
   document.querySelector("#files").value = "";
 }
@@ -292,7 +294,7 @@ async function processQueue() {
       await refreshQueue();
     }, controller.signal);
     await queueDb.delete(item.id);
-    toast(result.duplicate ? "Duplicate skipped" : "Shared successfully");
+    toast(result.duplicate ? "Already shared" : "Shared successfully");
   } catch (error) {
     if (state.cancelledUploads.has(item.id)) {
       state.cancelledUploads.delete(item.id);

@@ -13,7 +13,7 @@ Syncavro is a Manifest V3 Chrome extension that opens as a page-mounted drawer f
 - Multiple four-digit broadcasts with recent-broadcast history
 - Persistent IndexedDB upload queue with per-item Clear and Clear all
 - Image drag-and-drop plus `Command+V`/`Ctrl+V` clipboard image paste
-- SHA-256 duplicate prevention within each broadcast
+- Retry-safe delivery without suppressing intentional repeated messages
 - Image downloads and a 10 MB upload limit
 - Anonymous Firebase Authentication
 - Realtime Database and Cloud Storage rules included in the repository
@@ -38,7 +38,7 @@ The web application includes:
 - Text and image sharing
 - Persistent IndexedDB upload queue
 - Background uploads, Retry, Clear, and Clear all
-- SHA-256 duplicate prevention shared with the extension
+- Retry-safe delivery shared with the extension
 - Image drag-and-drop, clipboard image paste, and file selection
 - Text copying and image downloads
 - Dark, Light, and System themes
@@ -345,20 +345,20 @@ The choice is stored locally and applies to the connection screen, broadcast fee
 - Removing a recent number only removes the local shortcut. It does not delete Firebase data.
 - Anyone with Firebase access who enters the same number sees that broadcast.
 
-## Duplicate prevention
+## Retry-safe delivery
 
-Syncavro normalizes text and calculates a SHA-256 content hash for every text or image item. Messages are stored at:
+Syncavro gives every send action a unique message ID and calculates a SHA-256 content hash for integrity metadata. Messages are stored at:
 
 ```text
-broadcasts/{fourDigitNumber}/messages/{sha256}
+broadcasts/{fourDigitNumber}/messages/{messageId}
 ```
 
-The hash becomes the Firebase message key. An atomic conditional write prevents the same content from appearing twice in one broadcast, including when two people submit it at nearly the same time.
+An atomic conditional write makes retries of the same queued item safe. A later send gets a new message ID, so users can intentionally send identical text or the same image again.
 
 Images are stored at:
 
 ```text
-broadcasts/{fourDigitNumber}/{sha256}-{safeFileName}
+broadcasts/{fourDigitNumber}/{messageId}-{safeFileName}
 ```
 
 ## Upload queue, drag-and-drop, and paste

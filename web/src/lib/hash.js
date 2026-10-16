@@ -13,3 +13,8 @@ export async function hashText(value) {
 export async function hashFile(file) {
   return toHex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
 }
+
+export function createMessageId() {
+  const nonce = crypto.randomUUID?.() || toHex(crypto.getRandomValues(new Uint8Array(16)));
+  return `${Date.now().toString(36)}-${nonce}`;
+}

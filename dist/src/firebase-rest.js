@@ -128,17 +128,20 @@ export class FirebaseRest {
 
   async publish(item, onProgress = () => {}, signal) {
     const token = await this.token();
+    const messageId = item.messageId || item.hash;
+    const contentHash = item.contentHash || item.hash;
     let image = {};
     if (item.type === "image") image = await this.uploadImage(item, token, onProgress, signal);
     const payload = {
-      id: item.hash,
-      hash: item.hash,
+      id: messageId,
+      hash: messageId,
+      contentHash,
       type: item.type,
       senderId: this.session.localId,
       createdAt: Date.now(),
       ...(item.type === "text" ? { text: item.text } : image),
     };
-    const url = `${this.databaseBase()}/broadcasts/${item.broadcast}/messages/${item.hash}.json?auth=${encodeURIComponent(token)}`;
+    const url = `${this.databaseBase()}/broadcasts/${item.broadcast}/messages/${messageId}.json?auth=${encodeURIComponent(token)}`;
     const response = await fetchWithTimeout(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json", "If-Match": "null_etag" },
@@ -152,12 +155,14 @@ export class FirebaseRest {
 
   async uploadImage(item, token, onProgress, signal) {
     onProgress(8);
-    const path = `broadcasts/${item.broadcast}/${item.hash}-${safeFileName(item.name)}`;
+    const messageId = item.messageId || item.hash;
+    const contentHash = item.contentHash || item.hash;
+    const path = `broadcasts/${item.broadcast}/${messageId}-${safeFileName(item.name)}`;
     const bucket = this.config.storageBucket.replace(/^gs:\/\//, "");
     const url = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o?uploadType=media&name=${encodeURIComponent(path)}`;
     const response = await fetchWithTimeout(url, {
       method: "POST",
-      headers: { Authorization: `Firebase ${token}`, "Content-Type": item.mime, "X-Goog-Meta-hash": item.hash },
+      headers: { Authorization: `Firebase ${token}`, "Content-Type": item.mime, "X-Goog-Meta-hash": contentHash },
       body: item.blob,
       signal,
     });

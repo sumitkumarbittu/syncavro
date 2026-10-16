@@ -17,6 +17,11 @@ export async function hashFile(file) {
   return toHex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
 }
 
+export function createMessageId() {
+  const nonce = crypto.randomUUID?.() || toHex(crypto.getRandomValues(new Uint8Array(16)));
+  return `${Date.now().toString(36)}-${nonce}`;
+}
+
 export function safeFileName(value) {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-90) || "image";
 }
