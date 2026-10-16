@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Syncavro | Real-Time Sharing",
+  "short_name": "Syncavro",
+  "version": "1.1.0",
+  "minimum_chrome_version": "102",
+  "description": "Share text and images instantly through private numbered broadcasts.",
+  "action": {
+    "default_title": "Open Syncavro",
+    "default_icon": {
+      "16": "public/icons/icon-16.png",
+      "32": "public/icons/icon-32.png",
+      "48": "public/icons/icon-48.png",
+      "128": "public/icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "public/icons/icon-16.png",
+    "32": "public/icons/icon-32.png",
+    "48": "public/icons/icon-48.png",
+    "128": "public/icons/icon-128.png"
+  },
+  "permissions": ["storage", "downloads", "activeTab", "scripting"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-drawer.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sidepanel.html", "src/*", "src/lib/*", "public/icons/*"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
+  "commands": {
+    "toggle-side-panel": {
+      "suggested_key": {
+        "default": "Ctrl+B",
+        "mac": "Command+B"
+      },
+      "description": "Open or close Syncavro on the current webpage"
+    }
+  },
+  "host_permissions": [
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*",
+    "https://*.firebaseio.com/*",
+    "https://*.firebasedatabase.app/*",
+    "https://firebasestorage.googleapis.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

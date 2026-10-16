@@ -1,0 +1,18 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "broadcasts": {
+      "$broadcast": {
+        ".read": "auth != null && $broadcast.matches(/^[0-9]{4}$/)",
+        "messages": {
+          ".indexOn": ["createdAt"],
+          "$message": {
+            ".write": "auth != null && $broadcast.matches(/^[0-9]{4}$/) && !data.exists() && newData.child('senderId').val() === auth.uid",
+            ".validate": "newData.hasChildren(['id', 'type', 'hash', 'senderId', 'createdAt']) && newData.child('id').isString() && newData.child('id').val() === $message && newData.child('hash').val() === $message && (newData.child('type').val() === 'text' || newData.child('type').val() === 'image') && newData.child('createdAt').isNumber()"
+          }
+        }
+      }
+    }
+  }
+}

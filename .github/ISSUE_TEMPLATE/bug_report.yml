@@ -1,0 +1,23 @@
+name: Bug report
+description: Report a reproducible Syncavro problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the Chrome version, operating system, and exact steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant errors
+      description: Remove Firebase ID tokens, refresh tokens, and personal data before posting.
