@@ -10,6 +10,9 @@ Syncavro is a Manifest V3 Chrome extension that opens as a page-mounted drawer f
 - Selectable Dark, Light, and System themes
 - True black dark background and true white light background
 - Realtime multi-user text and image sharing
+- Chunked long-text sharing with collapsed previews and on-demand Read more/Copy
+- Message deletion and broadcast-scoped Delete all
+- Firebase history pagination in 25-message pages
 - Multiple four-digit broadcasts with recent-broadcast history
 - Persistent IndexedDB upload queue with per-item Clear and Clear all
 - Image drag-and-drop plus `Command+V`/`Ctrl+V` clipboard image paste
@@ -36,6 +39,9 @@ The web application includes:
 - Expanded desktop workspace for laptop use
 - Live numbered broadcasts and recent-broadcast history
 - Text and image sharing
+- Chunked long text with collapsed previews and on-demand full-text loading
+- Per-message deletion and broadcast-scoped Delete all
+- Infinite-scroll history loaded in 25-message pages
 - Persistent IndexedDB upload queue
 - Background uploads, Retry, Clear, and Clear all
 - Retry-safe delivery shared with the extension
@@ -373,17 +379,25 @@ Text and images enter a local IndexedDB queue immediately. The composer becomes 
 - Copy an image, focus the Syncavro drawer, and press `Command+V` on macOS or `Ctrl+V` on Windows/Linux.
 - Pasted text goes into the message composer when it is not already focused.
 
+## Long text, history paging, and deletion
+
+Text input has no application-level character limit. Each new text message is split into chunks of up to 48,000 characters. The live feed stores and downloads only a 420-character preview plus metadata. The complete body is downloaded only when someone selects the chevron to expand it or uses Copy.
+
+The newest 25 messages load when a broadcast opens. Scrolling to the top fetches the next earlier page while preserving the current scroll position. This avoids downloading an entire busy broadcast during startup.
+
+Every message has a compact delete action. The delete-all action beside the broadcast selector removes only the currently selected four-digit broadcast. It does not alter any other broadcast number. Deploy the current `database.rules.json` and `storage.rules` before using deletion or chunked text.
+
 ## Firebase data and security model
 
 The current rules provide a shared authenticated broadcast model:
 
 - Unauthenticated reads and writes are denied.
 - Broadcast IDs must be exactly four digits.
-- Existing messages cannot be overwritten.
+- Existing messages cannot be overwritten, but authenticated broadcast users can delete them.
 - The message sender ID must match the authenticated Firebase user.
 - Storage accepts authenticated image uploads only.
 - Images larger than 10 MB are rejected by both the UI and Storage Rules.
-- Storage deletion is denied from the client.
+- Authenticated broadcast users can delete stored images through the application.
 
 Four-digit broadcast numbers are intentionally easy to share, but they are not private secrets. For confidential sharing, extend the design with invitations, per-broadcast membership records, and membership-based Security Rules.
 
@@ -433,4 +447,4 @@ npm test
 npm run build
 ```
 
-The tests cover stable duplicate hashing and four-digit broadcast validation. The build copies only the extension runtime, rules, icons, and manifest into `dist`.
+The tests cover stable integrity hashing, unique message IDs, and four-digit broadcast validation. The build copies only the extension runtime, rules, icons, and manifest into `dist`.

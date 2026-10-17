@@ -20,6 +20,8 @@ const state = {
   processing: false,
   queueOpen: false,
   feedError: "",
+  hasMore: false,
+  loadingOlder: false,
   theme: "dark",
   activeUpload: null,
   cancelledUploads: new Set(),
@@ -95,11 +97,11 @@ function renderApp() {
       <div class="picker-row"><div class="broadcast-picker">
         <button class="broadcast-trigger" id="broadcast-trigger"><span class="hash-box">#</span><span><small>Broadcast</small><strong id="broadcast-label">0001</strong></span><span class="presence"><i></i> Live</span><span class="chevron">⌄</span></button>
         <div class="broadcast-menu" id="broadcast-menu" hidden></div>
-      </div></div>
+      </div><button class="room-clear" id="room-clear" title="Delete all messages in this broadcast" aria-label="Delete all messages in this broadcast">⌫</button></div>
       <section class="feed" id="feed"></section>
       <div class="drop-zone" id="drop-zone" hidden><div><strong>Drop images to share</strong><span>Up to 10 MB each</span></div></div>
       <section id="queue-slot"></section>
-      <section class="composer"><div class="composer-box"><textarea id="draft" maxlength="5000" rows="1" placeholder="Message broadcast #0001"></textarea><div class="composer-actions"><button class="attach" id="attach">▧ <span>Image</span></button><input id="files" hidden type="file" accept="image/*" multiple><span class="queue-count" id="queue-count">Ready</span><button class="send" id="send" disabled>➤</button></div></div><p class="privacy-note"><span></span> Live in #<b id="privacy-room">0001</b> · Images up to 10 MB</p></section>
+      <section class="composer"><div class="composer-box"><textarea id="draft" rows="1" placeholder="Message broadcast #0001"></textarea><div class="composer-actions"><button class="attach" id="attach">▧ <span>Image</span></button><input id="files" hidden type="file" accept="image/*" multiple><span class="queue-count" id="queue-count">Ready</span><button class="send" id="send" disabled>➤</button></div></div><p class="privacy-note"><span></span> Live in #<b id="privacy-room">0001</b> · Long text loads on demand</p></section>
       <div id="toast-slot"></div>
     </main>`;
   bindAppEvents();
@@ -120,6 +122,10 @@ function bindAppEvents() {
   document.querySelector("#files").addEventListener("change", (event) => addFiles([...event.target.files]));
   bindDropAndPaste();
   document.querySelector("#broadcast-trigger").addEventListener("click", toggleBroadcastMenu);
+  document.querySelector("#room-clear").addEventListener("click", clearCurrentBroadcast);
+  document.querySelector("#feed").addEventListener("scroll", async (event) => {
+    if (event.currentTarget.scrollTop < 90) await loadOlderMessages();
+  });
   document.querySelector("#settings").addEventListener("click", async () => {
     state.client.closeStream();
     const config = await getLocal(CONFIG_KEY, {});
@@ -169,7 +175,7 @@ function bindDropAndPaste() {
     const draft = document.querySelector("#draft");
     if (text && document.activeElement !== draft) {
       event.preventDefault();
-      draft.value = `${draft.value}${text}`.slice(0, 5000);
+      draft.value = `${draft.value}${text}`;
       draft.dispatchEvent(new Event("input"));
       draft.focus();
     }
@@ -207,18 +213,48 @@ async function joinBroadcast(number) {
   state.broadcast = number;
   state.feedError = "";
   state.messages = [];
+  state.hasMore = false;
   state.recent = [number, ...state.recent.filter((item) => item !== number)].slice(0, 8);
   await setLocal(RECENT_KEY, state.recent);
   updateRoomLabels();
   renderFeed();
-  await state.client.listen(number, (messages) => {
+  await state.client.listen(number, (messages, meta = {}) => {
     state.messages = messages;
+    state.hasMore = Boolean(meta.hasMore);
     state.feedError = "";
     renderFeed();
   }, (error) => {
     state.feedError = friendlyError(error);
     renderFeed();
   });
+}
+
+async function loadOlderMessages() {
+  if (state.loadingOlder || !state.hasMore || !state.messages.length) return;
+  const feed = document.querySelector("#feed");
+  state.loadingOlder = true;
+  const previousHeight = feed.scrollHeight;
+  try {
+    const result = await state.client.loadOlder(state.broadcast);
+    state.hasMore = result.hasMore;
+    requestAnimationFrame(() => { feed.scrollTop += feed.scrollHeight - previousHeight; });
+  } catch (error) {
+    toast(friendlyError(error));
+  } finally {
+    state.loadingOlder = false;
+  }
+}
+
+async function clearCurrentBroadcast() {
+  if (!state.messages.length) return toast("This broadcast is already empty");
+  if (!confirm(`Delete every message in broadcast #${state.broadcast}? Other broadcasts will not be changed.`)) return;
+  try {
+    await state.client.clearBroadcast(state.broadcast);
+    state.messages = [];
+    state.hasMore = false;
+    renderFeed();
+    toast(`Broadcast #${state.broadcast} cleared`);
+  } catch (error) { toast(friendlyError(error)); }
 }
 
 function updateRoomLabels() {
@@ -368,9 +404,10 @@ function renderFeed() {
     feed.innerHTML = `<div class="state-card"><div class="empty-orb">✦</div><strong>Broadcast #${state.broadcast} is ready</strong><p>Share text or an image. Anyone using this number will see it instantly.</p></div>`;
     return;
   }
-  feed.innerHTML = "";
+  const shouldStickToBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100 && !state.loadingOlder;
+  feed.innerHTML = state.loadingOlder ? `<div class="history-loader">Loading earlier messages…</div>` : "";
   for (const message of state.messages) feed.append(messageElement(message));
-  requestAnimationFrame(() => feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" }));
+  if (shouldStickToBottom) requestAnimationFrame(() => feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" }));
 }
 
 function messageElement(message) {
@@ -379,18 +416,45 @@ function messageElement(message) {
   article.className = `message ${mine ? "mine" : "theirs"}`;
   const meta = document.createElement("div");
   meta.className = "message-meta";
-  meta.innerHTML = `<span class="avatar">●</span><span>${mine ? "You" : `Guest ${escapeHtml(message.senderId.slice(0, 4))}`}</span><time>${formatTime(message.createdAt)}</time>`;
+  meta.innerHTML = `<span class="avatar">●</span><span>${mine ? "You" : `Guest ${escapeHtml(message.senderId.slice(0, 4))}`}</span><time>${formatTime(message.createdAt)}</time><button class="message-delete" title="Delete message" aria-label="Delete message">⌫</button>`;
+  meta.querySelector(".message-delete").onclick = async () => {
+    if (!confirm("Delete this message?")) return;
+    try { await state.client.deleteMessage(state.broadcast, message); toast("Message deleted"); }
+    catch (error) { toast(friendlyError(error)); }
+  };
   article.append(meta);
   if (message.type === "text") {
     const bubble = document.createElement("div");
     bubble.className = "text-bubble";
     const text = document.createElement("p");
-    text.textContent = message.text;
+    const preview = message.textPreview ?? message.text ?? "";
+    text.textContent = preview;
+    text.className = "message-text collapsed";
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
     const copy = document.createElement("button");
     copy.textContent = "▣";
     copy.title = "Copy text";
-    copy.onclick = async () => { await navigator.clipboard.writeText(message.text); toast("Copied to clipboard"); };
-    bubble.append(text, copy); article.append(bubble);
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(await state.client.getText(state.broadcast, message)); toast("Copied to clipboard"); }
+      catch (error) { toast(friendlyError(error)); }
+    };
+    actions.append(copy);
+    if ((message.textLength || message.text?.length || 0) > 420) {
+      const expand = document.createElement("button");
+      expand.textContent = "⌄"; expand.title = "Read full message";
+      expand.onclick = async () => {
+        if (text.dataset.expanded === "true") {
+          text.textContent = preview; text.dataset.expanded = "false"; text.classList.add("collapsed"); expand.textContent = "⌄"; return;
+        }
+        expand.disabled = true;
+        try { text.textContent = await state.client.getText(state.broadcast, message); text.dataset.expanded = "true"; text.classList.remove("collapsed"); expand.textContent = "⌃"; }
+        catch (error) { toast(friendlyError(error)); }
+        finally { expand.disabled = false; }
+      };
+      actions.append(expand);
+    }
+    bubble.append(text, actions); article.append(bubble);
   } else {
     const card = document.createElement("div");
     card.className = "image-card";

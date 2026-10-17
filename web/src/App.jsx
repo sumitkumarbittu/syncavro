@@ -38,6 +38,8 @@ export default function App() {
   const [broadcast, setBroadcast] = useState("0001");
   const [recent, setRecent] = useState(() => [...new Set(["0001", ...readJson(RECENT_KEY, [])])].slice(0, 8));
   const [messages, setMessages] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [queue, setQueue] = useState([]);
   const [feedError, setFeedError] = useState("");
   const [draft, setDraft] = useState("");
@@ -55,6 +57,7 @@ export default function App() {
   const cancelled = useRef(new Set());
   const fileInput = useRef(null);
   const feedRef = useRef(null);
+  const loadingHistory = useRef(false);
 
   const resolvedTheme = theme === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
@@ -108,13 +111,15 @@ export default function App() {
   useEffect(() => {
     if (status !== "ready" || !clientRef.current) return;
     setMessages([]);
+    setHasMore(false);
     setFeedError("");
     const nextRecent = [broadcast, ...recent.filter((room) => room !== broadcast)].slice(0, 8);
     setRecent(nextRecent);
     localStorage.setItem(RECENT_KEY, JSON.stringify(nextRecent));
     let cleanup;
-    clientRef.current.listen(broadcast, (next) => {
+    clientRef.current.listen(broadcast, (next, meta = {}) => {
       setMessages(next);
+      setHasMore(Boolean(meta.hasMore));
       setFeedError("");
     }, (error) => setFeedError(friendlyError(error))).then((fn) => { cleanup = fn; });
     return () => cleanup?.();
@@ -123,7 +128,7 @@ export default function App() {
   }, [broadcast, status]);
 
   useEffect(() => {
-    if (feedRef.current) feedRef.current.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+    if (!loadingHistory.current && feedRef.current) feedRef.current.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
@@ -223,6 +228,38 @@ export default function App() {
     localStorage.setItem(RECENT_KEY, JSON.stringify(next));
   };
 
+  const loadOlder = async () => {
+    if (loadingOlder || !hasMore || !messages.length || !clientRef.current) return;
+    const feed = feedRef.current;
+    const previousHeight = feed?.scrollHeight || 0;
+    loadingHistory.current = true;
+    setLoadingOlder(true);
+    try {
+      const result = await clientRef.current.loadOlder(broadcast);
+      setHasMore(result.hasMore);
+      requestAnimationFrame(() => {
+        if (feed) feed.scrollTop += feed.scrollHeight - previousHeight;
+        loadingHistory.current = false;
+      });
+    } catch (error) { toast(friendlyError(error)); }
+    finally { setLoadingOlder(false); if (!feed) loadingHistory.current = false; }
+  };
+
+  const deleteMessage = async (message) => {
+    if (!window.confirm("Delete this message?")) return;
+    try { await clientRef.current.deleteMessage(broadcast, message); toast("Message deleted"); }
+    catch (error) { toast(friendlyError(error)); }
+  };
+
+  const clearBroadcast = async () => {
+    if (!messages.length) return toast("This broadcast is already empty");
+    if (!window.confirm(`Delete every message in broadcast #${broadcast}? Other broadcasts will not be changed.`)) return;
+    try {
+      await clientRef.current.clearBroadcast(broadcast);
+      setMessages([]); setHasMore(false); toast(`Broadcast #${broadcast} cleared`);
+    } catch (error) { toast(friendlyError(error)); }
+  };
+
   const handlePaste = (event) => {
     const images = [...event.clipboardData.items].filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter(Boolean);
     if (images.length) {
@@ -247,7 +284,7 @@ export default function App() {
         <p className="eyebrow">REAL-TIME FIREBASE SHARING</p>
         <h1>Move anything.<br />Keep everyone in sync.</h1>
         <p>One focused place for quick text and image handoffs across your phone, laptop, and team.</p>
-        <div className="hero-pills"><span>Live broadcasts</span><span>Duplicate-free</span><span>Private queue</span></div>
+        <div className="hero-pills"><span>Live broadcasts</span><span>Retry-safe</span><span>Private queue</span></div>
         <div className="hero-room"><i></i><span>Connected to broadcast</span><strong>#{broadcast}</strong></div>
       </aside>
       <main className="app-shell">
@@ -256,16 +293,18 @@ export default function App() {
           <div className="header-actions"><ThemeSelect value={theme} onChange={setTheme} /><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Firebase settings">⚙</button></div>
         </header>
         <div className="picker-row">
-          <button className="broadcast-trigger" onClick={() => setMenuOpen((value) => !value)}><span className="hash-box">#</span><span><small>Broadcast</small><strong>{broadcast}</strong></span><span className="presence"><i /> Live</span><span>⌄</span></button>
+          <div className="broadcast-picker"><button className="broadcast-trigger" onClick={() => setMenuOpen((value) => !value)}><span className="hash-box">#</span><span><small>Broadcast</small><strong>{broadcast}</strong></span><span className="presence"><i /> Live</span><span>⌄</span></button></div>
+          <button className="room-clear" onClick={clearBroadcast} title="Delete all messages in this broadcast" aria-label="Delete all messages in this broadcast">⌫</button>
           {menuOpen && <BroadcastMenu broadcast={broadcast} recent={recent} manual={manualRoom} setManual={(value) => setManualRoom(value.replace(/\D/g, "").slice(0, 4))} openRoom={openRoom} removeRecent={removeRecent} close={() => setMenuOpen(false)} />}
         </div>
-        <section className="feed" ref={feedRef}>
-          {feedError ? <EmptyState error title="Couldn’t open this broadcast" text={feedError} /> : !messages.length ? <EmptyState title={`Broadcast #${broadcast} is ready`} text="Share text or an image. Anyone using this number will see it instantly." /> : messages.map((message) => <Message key={message.id} message={message} mine={message.senderId === uid} toast={toast} />)}
+        <section className="feed" ref={feedRef} onScroll={(event) => { if (event.currentTarget.scrollTop < 90) loadOlder(); }}>
+          {loadingOlder && <div className="history-loader">Loading earlier messages…</div>}
+          {feedError ? <EmptyState error title="Couldn’t open this broadcast" text={feedError} /> : !messages.length ? <EmptyState title={`Broadcast #${broadcast} is ready`} text="Share text or an image. Anyone using this number will see it instantly." /> : messages.map((message) => <Message key={message.id} message={message} mine={message.senderId === uid} toast={toast} client={clientRef.current} broadcast={broadcast} onDelete={deleteMessage} />)}
         </section>
         {!!queue.length && <QueueTray queue={queue} open={queueOpen} setOpen={setQueueOpen} clearItem={clearItem} clearAll={clearAll} retry={retry} />}
         <section className="composer">
-          <div className="composer-box"><textarea value={draft} onChange={(event) => setDraft(event.target.value.slice(0, 5000))} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } }} rows="1" placeholder={`Message broadcast #${broadcast}`} /><div className="composer-actions"><button className="attach" onClick={() => fileInput.current?.click()}>▧ <span>Image</span></button><input ref={fileInput} hidden type="file" accept="image/*" multiple onChange={(event) => addFiles([...event.target.files])} /><span className="queue-count">{pending ? `${pending} queued` : "Ready"}</span><button className="send" disabled={!draft.trim()} onClick={sendText}>➤</button></div></div>
-          <p className="privacy-note"><span /> Live in #{broadcast} · Images up to 10 MB</p>
+          <div className="composer-box"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } }} rows="1" placeholder={`Message broadcast #${broadcast}`} /><div className="composer-actions"><button className="attach" onClick={() => fileInput.current?.click()}>▧ <span>Image</span></button><input ref={fileInput} hidden type="file" accept="image/*" multiple onChange={(event) => addFiles([...event.target.files])} /><span className="queue-count">{pending ? `${pending} queued` : "Ready"}</span><button className="send" disabled={!draft.trim()} onClick={sendText}>➤</button></div></div>
+          <p className="privacy-note"><span /> Live in #{broadcast} · Long text loads on demand</p>
         </section>
         {dragging && <div className="drop-zone" onDragLeave={() => setDragging(false)}><div><strong>Drop images to share</strong><span>Up to 10 MB each</span></div></div>}
         {notice && <div className="toast">✓ {notice}</div>}
@@ -301,7 +340,20 @@ function EmptyState({ title, text, error }) {
   return <div className={`state-card ${error ? "error-state" : ""}`}><div className="empty-orb">{error ? "!" : "✦"}</div><strong>{title}</strong><p>{text}</p></div>;
 }
 
-function Message({ message, mine, toast }) {
+function Message({ message, mine, toast, client, broadcast, onDelete }) {
+  const preview = message.textPreview ?? message.text ?? "";
+  const isLong = (message.textLength || message.text?.length || 0) > 420;
+  const [fullText, setFullText] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const getText = async () => fullText ?? await client.getText(broadcast, message);
+  const toggleText = async () => {
+    if (expanded) return setExpanded(false);
+    setLoading(true);
+    try { const value = await getText(); setFullText(value); setExpanded(true); }
+    catch (error) { toast(friendlyError(error)); }
+    finally { setLoading(false); }
+  };
   const download = async () => {
     try {
       const blob = await fetch(message.url).then((response) => response.blob());
@@ -311,7 +363,7 @@ function Message({ message, mine, toast }) {
       URL.revokeObjectURL(url);
     } catch { window.open(message.url, "_blank", "noopener,noreferrer"); }
   };
-  return <article className={`message ${mine ? "mine" : "theirs"}`}><div className="message-meta"><span className="avatar">●</span><span>{mine ? "You" : `Guest ${message.senderId?.slice(0, 4) || "user"}`}</span><time>{formatTime(message.createdAt)}</time></div>{message.type === "text" ? <div className="text-bubble"><p>{message.text}</p><button onClick={async () => { await navigator.clipboard.writeText(message.text); toast("Copied to clipboard"); }} title="Copy text">▣</button></div> : <div className="image-card"><img src={message.url} alt={message.name || "Shared image"} loading="lazy" /><div className="image-details"><span>▧</span><span><strong>{message.name || "Image"}</strong><small>{formatSize(message.size)}</small></span><button onClick={download} title="Download image">↓</button></div></div>}{mine && <span className="delivered">✓✓ Synced</span>}</article>;
+  return <article className={`message ${mine ? "mine" : "theirs"}`}><div className="message-meta"><span className="avatar">●</span><span>{mine ? "You" : `Guest ${message.senderId?.slice(0, 4) || "user"}`}</span><time>{formatTime(message.createdAt)}</time><button className="message-delete" onClick={() => onDelete(message)} title="Delete message" aria-label="Delete message">⌫</button></div>{message.type === "text" ? <div className="text-bubble"><p className={`message-text ${expanded ? "expanded" : "collapsed"}`}>{expanded ? fullText : preview}</p><div className="message-actions"><button onClick={async () => { try { await navigator.clipboard.writeText(await getText()); toast("Copied to clipboard"); } catch (error) { toast(friendlyError(error)); } }} title="Copy text">▣</button>{isLong && <button onClick={toggleText} disabled={loading} title={expanded ? "Collapse message" : "Read full message"}>{loading ? "…" : expanded ? "⌃" : "⌄"}</button>}</div></div> : <div className="image-card"><img src={message.url} alt={message.name || "Shared image"} loading="lazy" /><div className="image-details"><span>▧</span><span><strong>{message.name || "Image"}</strong><small>{formatSize(message.size)}</small></span><button onClick={download} title="Download image">↓</button></div></div>}{mine && <span className="delivered">✓✓ Synced</span>}</article>;
 }
 
 function QueueTray({ queue, open, setOpen, clearItem, clearAll, retry }) {

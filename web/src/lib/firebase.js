@@ -1,10 +1,15 @@
 const TOKEN_KEY = "syncavro.firebaseSession";
+const PAGE_SIZE = 25;
+const TEXT_CHUNK_SIZE = 48000;
 
 export class FirebaseClient {
   constructor(config) {
     this.config = config;
     this.session = null;
     this.closeListener = null;
+    this.messageState = {};
+    this.emitMessages = null;
+    this.hasMore = false;
   }
 
   async connect() {
@@ -60,10 +65,12 @@ export class FirebaseClient {
   async listen(broadcast, onMessages, onError) {
     this.closeStream();
     const state = {};
+    this.messageState = state;
     let stopped = false;
     let retryTimer;
     let stream;
-    const emit = () => onMessages(Object.values(state).sort((a, b) => a.createdAt - b.createdAt));
+    const emit = () => onMessages(Object.values(state).sort((a, b) => a.createdAt - b.createdAt), { hasMore: this.hasMore });
+    this.emitMessages = emit;
     const apply = (event) => {
       const packet = JSON.parse(event.data);
       if (packet.path === "/") {
@@ -80,10 +87,11 @@ export class FirebaseClient {
       if (stopped) return;
       try {
         const token = await this.token();
-        const url = `${this.databaseBase()}/broadcasts/${broadcast}/messages.json?auth=${encodeURIComponent(token)}&orderBy=%22createdAt%22&limitToLast=100`;
+        const url = `${this.databaseBase()}/broadcasts/${broadcast}/messages.json?auth=${encodeURIComponent(token)}&orderBy=%22createdAt%22&limitToLast=${PAGE_SIZE}`;
         const initial = await readResponse(await fetchWithTimeout(url, { headers: { Accept: "application/json" } }));
         Object.keys(state).forEach((key) => delete state[key]);
         Object.assign(state, initial || {});
+        this.hasMore = Object.keys(initial || {}).length === PAGE_SIZE;
         emit();
         stream = new EventSource(url);
         stream.addEventListener("put", apply);
@@ -114,6 +122,22 @@ export class FirebaseClient {
   closeStream() {
     this.closeListener?.();
     this.closeListener = null;
+    this.messageState = {};
+    this.emitMessages = null;
+    this.hasMore = false;
+  }
+
+  async loadOlder(broadcast) {
+    const messages = Object.values(this.messageState);
+    if (!messages.length || !this.hasMore) return { hasMore: false };
+    const oldest = Math.min(...messages.map((message) => Number(message.createdAt) || Date.now()));
+    const token = await this.token();
+    const url = `${this.databaseBase()}/broadcasts/${broadcast}/messages.json?auth=${encodeURIComponent(token)}&orderBy=%22createdAt%22&endAt=${oldest - 1}&limitToLast=${PAGE_SIZE}`;
+    const page = await readResponse(await fetchWithTimeout(url, { headers: { Accept: "application/json" } }));
+    Object.assign(this.messageState, page || {});
+    this.hasMore = Object.keys(page || {}).length === PAGE_SIZE;
+    this.emitMessages?.();
+    return { hasMore: this.hasMore };
   }
 
   async publish(item, onProgress = () => {}, signal) {
@@ -122,6 +146,7 @@ export class FirebaseClient {
     const contentHash = item.contentHash || item.hash;
     let image = {};
     if (item.type === "image") image = await this.uploadImage(item, token, onProgress, signal);
+    if (item.type === "text") await this.uploadTextBody(item, messageId, token, onProgress, signal);
     const payload = {
       id: messageId,
       hash: messageId,
@@ -129,7 +154,7 @@ export class FirebaseClient {
       type: item.type,
       senderId: this.session.localId,
       createdAt: Date.now(),
-      ...(item.type === "text" ? { text: item.text } : image),
+      ...(item.type === "text" ? { textPreview: item.text.slice(0, 420), textLength: item.text.length, chunked: true } : image),
     };
     const url = `${this.databaseBase()}/broadcasts/${item.broadcast}/messages/${messageId}.json?auth=${encodeURIComponent(token)}`;
     const response = await fetchWithTimeout(url, {
@@ -141,6 +166,49 @@ export class FirebaseClient {
     if (response.status === 412) return { duplicate: true };
     await readResponse(response);
     return { duplicate: false };
+  }
+
+  async uploadTextBody(item, messageId, token, onProgress, signal) {
+    const total = Math.max(1, Math.ceil(item.text.length / TEXT_CHUNK_SIZE));
+    for (let offset = 0, index = 0; offset < item.text.length; offset += TEXT_CHUNK_SIZE, index += 1) {
+      const chunkKey = String(index).padStart(6, "0");
+      const url = `${this.databaseBase()}/broadcasts/${item.broadcast}/messageBodies/${messageId}/chunks/${chunkKey}.json?auth=${encodeURIComponent(token)}`;
+      await readResponse(await fetchWithTimeout(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item.text.slice(offset, offset + TEXT_CHUNK_SIZE)), signal }, 30000));
+      onProgress(Math.round(((index + 1) / total) * 90));
+    }
+  }
+
+  async getText(broadcast, message) {
+    if (typeof message.text === "string") return message.text;
+    const token = await this.token();
+    const url = `${this.databaseBase()}/broadcasts/${broadcast}/messageBodies/${message.id}.json?auth=${encodeURIComponent(token)}`;
+    const body = await readResponse(await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, 60000));
+    return Object.keys(body?.chunks || {}).sort().map((key) => body.chunks[key]).join("");
+  }
+
+  async deleteMessage(broadcast, message) {
+    const token = await this.token();
+    if (message.storagePath) await this.deleteStorage(message.storagePath, token).catch(() => {});
+    await Promise.all([this.deleteDatabasePath(`broadcasts/${broadcast}/messages/${message.id}`, token), this.deleteDatabasePath(`broadcasts/${broadcast}/messageBodies/${message.id}`, token)]);
+  }
+
+  async clearBroadcast(broadcast) {
+    const token = await this.token();
+    const url = `${this.databaseBase()}/broadcasts/${broadcast}/messages.json?auth=${encodeURIComponent(token)}`;
+    const messages = await readResponse(await fetchWithTimeout(url, { headers: { Accept: "application/json" } }));
+    await Promise.all(Object.values(messages || {}).filter((message) => message.storagePath).map((message) => this.deleteStorage(message.storagePath, token).catch(() => {})));
+    await this.deleteDatabasePath(`broadcasts/${broadcast}`, token);
+  }
+
+  async deleteDatabasePath(path, token) {
+    const url = `${this.databaseBase()}/${path}.json?auth=${encodeURIComponent(token)}`;
+    await readResponse(await fetchWithTimeout(url, { method: "DELETE" }));
+  }
+
+  async deleteStorage(path, token) {
+    const bucket = this.config.storageBucket.replace(/^gs:\/\//, "");
+    const url = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}`;
+    await readResponse(await fetchWithTimeout(url, { method: "DELETE", headers: { Authorization: `Firebase ${token}` } }, 30000));
   }
 
   async uploadImage(item, token, onProgress, signal) {

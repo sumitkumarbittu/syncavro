@@ -9,7 +9,8 @@ service firebase.storage {
         && broadcast.matches('^[0-9]{4}$')
         && request.resource.size < 10 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
-      allow delete: if false;
+      allow delete: if request.auth != null
+        && broadcast.matches('^[0-9]{4}$');
     }
   }
 }
